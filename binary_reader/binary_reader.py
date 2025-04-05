@@ -115,7 +115,7 @@ class BinaryReader:
         if self.__idx == self.size():
             self.__idx += size
 
-        self.extend([0] * size)
+        self.__buf.extend(bytearray(size))
 
     def align_pos(self, size: int) -> int:
         """Aligns the current position to the given size.\n
@@ -210,6 +210,10 @@ class BinaryReader:
     def set_endian(self, endianness: Endian) -> None:
         """Sets the endianness of the BinaryReader."""
         self.__endianness = endianness
+    
+    def get_endian(self) -> Endian:
+        """Returns the endianness of the BinaryReader."""
+        return self.__endianness
 
     def set_encoding(self, encoding: str) -> None:
         """Sets the default encoding of the BinaryReader when reading/writing strings.\n
@@ -221,19 +225,21 @@ class BinaryReader:
     @staticmethod
     def is_iterable(x) -> bool:
         return hasattr(x, '__iter__') and not isinstance(x, (str, bytes))
-
+        
+    
     def __read_type(self, format: str, count=1):
         i = self.__idx
-        new_offset = self.__idx + (FMT[format] * count)
-
-        end = ">" if self.__endianness else "<"
+        size = FMT[format] * count
+        new_offset = i + size
 
         if self.__past_eof(new_offset):
-            raise Exception(
-                'BinaryReader Error: cannot read farther than buffer length.')
+            raise ValueError('BinaryReader Error: cannot read farther than buffer length.')
+
+        endianness = ">" if self.__endianness else "<"
+        format_str = endianness + str(count) + format
 
         self.__idx = new_offset
-        return struct.unpack_from(end + str(count) + format, self.__buf, i)
+        return struct.unpack_from(format_str, self.__buf, i)
 
     def read_bytes(self, size=1) -> bytes:
         """Reads a bytes object with the given size from the current position."""
@@ -404,7 +410,8 @@ class BinaryReader:
             struct.pack_into(end + str(count) + format, self.__buf, i, *value)
         else:
             struct.pack_into(end + str(count) + format, self.__buf, i, value)
-
+    
+            
     def write_bytes(self, value: bytes) -> None:
         """Writes a bytes object to the buffer."""
         self.__write_type("s", value, is_iterable=False)
