@@ -7,17 +7,28 @@ import struct
 from contextlib import contextmanager
 from enum import Flag, IntEnum
 from typing import Tuple, Union
+import numpy as np
 
-FMT = dict()
-for c in ["b", "B", "s"]:
-    FMT[c] = 1
-for c in ["h", "H", "e"]:
-    FMT[c] = 2
-for c in ["i", "I", "f"]:
-    FMT[c] = 4
-for c in ["q", "Q"]:
-    FMT[c] = 8
+FMT = {
+    'b': 1, 'B': 1, 's': 1,
+    'h': 2, 'H': 2, 'e': 2,
+    'i': 4, 'I': 4, 'f': 4,
+    'q': 8, 'Q': 8, 'd': 8,
+}
 
+_numpy_dtype_map = {
+    "int8": "i1",
+    "uint8": "u1",
+    "int16": "i2",
+    "uint16": "u2",
+    "int32": "i4",
+    "uint32": "u4",
+    "int64": "i8",
+    "uint64": "u8",
+    "float16": "f2",
+    "float32": "f4",
+    "float64": "f8"
+}
 
 class Endian(Flag):
     LITTLE = False
@@ -251,21 +262,38 @@ class BinaryReader:
         If encoding is `None` (default), will use the BinaryReader's encoding.
         """
         encode = encoding or self.__encoding
+        buf = self.__buf
+        idx = self.__idx
 
         if size is None:
-            string = bytearray()
-            while self.__idx < len(self.__buf):
-                string.append(self.__buf[self.__idx])
-                self.__idx += 1
-                if string[-1] == 0:
-                    break
-
-            return string.split(b'\x00', 1)[0].decode(encode)
+            end = buf.find(0, idx)
+            if end == -1:
+                end = len(buf)
+            result = buf[idx:end].decode(encode)
+            self.__idx = end + 1 if end < len(buf) else end
+            return result
 
         if size < 0:
             raise ValueError('size cannot be negative')
 
-        return self.read_bytes(size).split(b'\x00', 1)[0].decode(encode)
+        end = idx + size
+        raw = buf[idx:end]
+        self.__idx = end
+
+        null_index = raw.find(0)
+        if null_index != -1:
+            raw = raw[:null_index]
+
+        return raw.decode(encode)
+    
+    def read_str_at_offset(self, offset: int, size=None, encoding=None) -> str:
+        """Reads a string from a specific offset without changing the current read position."""
+        current = self.__idx
+        try:
+            self.seek(offset)
+            return self.read_str(size, encoding)
+        finally:
+            self.seek(current)
 
     def read_str_to_token(self, token: str, encoding=None) -> str:
         """Reads a string until a string token is found.\n
@@ -351,7 +379,7 @@ class BinaryReader:
             return self.__read_type("B", count)
         return self.__read_type("B")[0]
 
-    def read_float(self, count=None) -> Union[float, Tuple[float]]:
+    def read_float32(self, count=None) -> Union[float, Tuple[float]]:
         """Reads a 32-bit float.\n
         If count is given, will return a tuple of values instead of 1 value.
         """
@@ -359,13 +387,53 @@ class BinaryReader:
             return self.__read_type("f", count)
         return self.__read_type("f")[0]
 
-    def read_half_float(self, count=None) -> Union[float, Tuple[float]]:
+    def read_float16(self, count=None) -> Union[float, Tuple[float]]:
         """Reads a 16-bit float (half-float).\n
         If count is given, will return a tuple of values instead of 1 value.
         """
         if count is not None:
             return self.__read_type("e", count)
         return self.__read_type("e")[0]
+    
+    def read_float64(self, count=None) -> Union[float, Tuple[float]]:
+        """Reads a 64-bit float.\n
+        If count is given, will return a tuple of values instead of 1 value.
+        """
+        if count is not None:
+            return self.__read_type("d", count)
+        return self.__read_type("d")[0]
+    
+    def read_array(self, type_name: str, count: int) -> np.ndarray:
+        """Reads an array of values as a NumPy array using the specified type name."""
+        if type_name not in _numpy_dtype_map:
+            raise ValueError(f"Unsupported type name '{type_name}' for array reading.")
+
+        dtype_str = _numpy_dtype_map[type_name]
+        dtype = np.dtype(dtype_str).newbyteorder('<' if self.__endianness == Endian.LITTLE else '>')
+        size = dtype.itemsize * count
+
+        if self.__idx + size > len(self.__buf):
+            raise ValueError("BinaryReader Error: can't read beyond buffer length.")
+
+        array = np.frombuffer(self.__buf, dtype=dtype, count=count, offset=self.__idx)
+        self.__idx += size
+        return array
+
+    def read_structured_array(self, dtype: Union[str, np.dtype], count: int) -> np.ndarray:
+        """Reads a structured NumPy array based on a given dtype and element count."""
+        if isinstance(dtype, str):
+            dtype = np.dtype(dtype)
+
+        dtype = dtype.newbyteorder('<' if self.__endianness == Endian.LITTLE else '>')
+        size = dtype.itemsize * count
+
+        if self.__idx + size > len(self.__buf):
+            raise ValueError("BinaryReader Error: can't read beyond buffer length.")
+
+        array = np.frombuffer(self.__buf, dtype=dtype, count=count, offset=self.__idx)
+        self.__idx += size
+        return array
+
 
     def read_struct(self, cls: type, count=None, *args) -> BrStruct:
         """Creates and returns an instance of the given `cls` after calling its `__br_read__` method.\n
@@ -486,17 +554,23 @@ class BinaryReader:
         """
         self.__write_type("B", value, self.is_iterable(value))
 
-    def write_float(self, value: float) -> None:
+    def write_float32(self, value: float) -> None:
         """Writes a 32-bit float.\n
         If value is iterable, will write all of the elements in the given iterable.
         """
         self.__write_type("f", value, self.is_iterable(value))
 
-    def write_half_float(self, value: float) -> None:
+    def write_float16(self, value: float) -> None:
         """Writes a 16-bit float (half-float).\n
         If value is iterable, will write all of the elements in the given iterable.
         """
         self.__write_type("e", value, self.is_iterable(value))
+    
+    def write_float64(self, value: float) -> None:
+        """Writes a 64-bit float.\n
+        If value is iterable, will write all of the elements in the given iterable.
+        """
+        self.__write_type("d", value, self.is_iterable(value))
 
     def write_struct(self, value: BrStruct, *args) -> None:
         """Calls the given value's `__br_write__` method.\n
