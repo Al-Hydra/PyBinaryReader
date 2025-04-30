@@ -484,7 +484,7 @@ class BinaryReader:
         """Writes a bytes object to the buffer."""
         self.__write_type("s", value, is_iterable=False)
 
-    def write_str(self, string: str, null=False, encoding=None) -> int:
+    def write_str(self, string: str, null=True, encoding=None) -> int:
         """Writes a whole string to the buffer.\n
         If null is `True`, will append a null byte (`0x00`) after the string.\n
         If encoding is `None` (default), will use the BinaryReader's encoding.\n
